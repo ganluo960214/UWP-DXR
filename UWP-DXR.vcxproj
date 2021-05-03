@@ -67,6 +67,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
       <DisableSpecificWarnings>4453;28204</DisableSpecificWarnings>
     </ClCompile>
+    <PreBuildEvent>
+      <Command>.\Externals\dxc_2020_10-22\bin\x64\dxc.exe -nologo -T lib_6_5 -Fo Shader\DxrShader.Fo.bin Shader\DxrShader.hlsl</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
@@ -112,6 +115,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <None Include="README.md" />
     <None Include="Shader\DxrShader.Fo.bin">
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
     </None>
