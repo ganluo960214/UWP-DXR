@@ -50,5 +50,6 @@
   <ItemGroup>
     <None Include="Shader\DxrShader.hlsl" />
     <None Include="Shader\DxrShader.Fo.bin" />
+    <None Include="README.md" />
   </ItemGroup>
 </Project>
