@@ -17,6 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="Shader\DxrShader.hlsl.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="Assets\LockScreenLogo.scale-200.png">
@@ -48,8 +49,9 @@
     <Page Include="MainPage.xaml" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Shader\DxrShader.hlsl" />
-    <None Include="Shader\DxrShader.Fo.bin" />
     <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Shader\DxrShader.hlsl" />
   </ItemGroup>
 </Project>

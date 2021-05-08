@@ -22,6 +22,8 @@ using namespace Microsoft::WRL;
 #include <windows.ui.xaml.media.dxinterop.h>
 #include <DirectXMath.h>
 
+#include "Shader/DxrShader.hlsl.h"
+
 
 void ThrowIfFailed(HRESULT hr) {
 	if (FAILED(hr))
@@ -51,7 +53,7 @@ ComPtr<ID3D12CommandQueue>			pICMDQueue = {};
 ComPtr<ID3D12CommandAllocator>		pICMDAlloc = {};
 ComPtr<ID3D12GraphicsCommandList6>	pICMDList6 = {};
 
-ComPtr<ID3D12Heap>					pIUploadHeap;
+ComPtr<ID3D12Heap>					pIUploadHeap = {};
 
 const UINT64						nFrameBackBufCount = 3u;
 ComPtr<IDXGISwapChain1>				pISwapChain1 = {};
@@ -71,7 +73,6 @@ UINT64								nCurFrameIndex = 0;
 
 
 UINT64								nDXRDescriptorSize = {};
-const UINT64						nDXRDescriptorHeapLength = 7;
 
 static const WCHAR* DxilFoBinFileName = L"Shader\\DxrShader.Fo.bin";
 static const WCHAR* kRayGenShader = L"RayGenerationShader";
@@ -125,9 +126,7 @@ D3D12_VERTEX_BUFFER_VIEW			stVertexBufferView = {};
 ComPtr<ID3D12Resource>				pIBottomLevelAS = {};
 ComPtr<ID3D12Resource>				pITopLevelAS = {};
 
-//根签名 DXR中需要两个根签名，一个是全局的根签名，另一个就是局部的根签名
 ComPtr<ID3D12RootSignature>	pIRSGlobal = {};
-ComPtr<ID3D12RootSignature>	pIRSLocal = {};
 
 static const D3D12_HEAP_PROPERTIES stDefaultHeapProps =
 {
@@ -156,7 +155,6 @@ MainPage::MainPage()
 
 
 
-
 #if defined(_DEBUG)
 #pragma region 在debug编译下，开启debug
 	{
@@ -174,9 +172,13 @@ MainPage::MainPage()
 
 #pragma region 初始化 dxgi factory
 	{
+		UINT CreateDXGIFactory2Flag = 0;
+#if defined(_DEBUG)
+		CreateDXGIFactory2Flag = DXGI_CREATE_FACTORY_DEBUG;
+#endif
 		ThrowIfFailed(
 			CreateDXGIFactory2(
-				DXGI_CREATE_FACTORY_DEBUG
+				CreateDXGIFactory2Flag
 				, IID_PPV_ARGS(&pIDXGIFactory7)));
 	}
 #pragma endregion
@@ -257,7 +259,7 @@ MainPage::MainPage()
 	{
 		if (pIAdapter4 == nullptr)
 		{
-			throw ref new Platform::Exception(-1, "no high gpu preference device");
+			throw ref new Platform::Exception(-1, "not find high gpu preference device");
 		}
 
 		ThrowIfFailed(D3D12CreateDevice(
@@ -301,6 +303,48 @@ MainPage::MainPage()
 			, pICMDAlloc.Get()
 			, nullptr
 			, IID_PPV_ARGS(&pICMDList6)));
+	}
+#pragma endregion
+
+
+
+#pragma region 创建交换链
+	{
+		DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+		swapChainDesc.Width					= iWidth;
+		swapChainDesc.Height				= iHeight;
+		swapChainDesc.Format				= emRenderTargetFormat;
+		swapChainDesc.Stereo				= false;							// 未知
+		swapChainDesc.SampleDesc.Count		= 1;
+		swapChainDesc.SampleDesc.Quality	= 0;
+		swapChainDesc.BufferUsage			= DXGI_USAGE_RENDER_TARGET_OUTPUT;	// 未知
+		swapChainDesc.BufferCount			= nFrameBackBufCount;
+		swapChainDesc.Scaling				= DXGI_SCALING_STRETCH;
+		swapChainDesc.SwapEffect			= DXGI_SWAP_EFFECT_FLIP_DISCARD;	// 未知
+		swapChainDesc.AlphaMode				= DXGI_ALPHA_MODE_PREMULTIPLIED;
+		swapChainDesc.Flags					= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+		ThrowIfFailed(pIDXGIFactory7->CreateSwapChainForComposition(
+			pICMDQueue.Get()
+			, &swapChainDesc
+			, nullptr
+			, pISwapChain1.GetAddressOf()));
+		ThrowIfFailed(pISwapChain1.As(&pISwapChain3));
+		for (UINT i = 0; i < swapChainDesc.BufferCount; i++)
+		{
+			ThrowIfFailed(pISwapChain3->GetBuffer(i, IID_PPV_ARGS(&pISwapChainBuffer[i])));
+		}
+
+	}
+#pragma endregion
+
+
+
+#pragma region 设置SwapChainPanel
+	{
+		ThrowIfFailed(
+			reinterpret_cast<IUnknown*>(swapChainPanel)->QueryInterface(IID_PPV_ARGS(&pIPanelNative))
+		);
+		ThrowIfFailed(pIPanelNative->SetSwapChain(pISwapChain3.Get()));
 	}
 #pragma endregion
 
@@ -546,9 +590,9 @@ MainPage::MainPage()
 		pInstanceDesc->Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
 		//mat4 m; // Identity matrix
 		DirectX::XMFLOAT4 m[3] = {
-			{1,1,1,1}
-			,{1,1,1,1}
-			,{1,1,1,1}
+			{1,0,0,0}
+			,{0,1,0,0}
+			,{0,0,1,0}
 		};
 		memcpy(
 			pInstanceDesc->Transform
@@ -601,54 +645,12 @@ MainPage::MainPage()
 
 
 
-#pragma region 创建交换链
-	{
-		DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-		swapChainDesc.Width = iWidth;
-		swapChainDesc.Height = iHeight;
-		swapChainDesc.Format = emRenderTargetFormat;
-		swapChainDesc.Stereo = false;							// 未知
-		swapChainDesc.SampleDesc.Count = 1;
-		swapChainDesc.SampleDesc.Quality = 0;
-		swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;	// 未知
-		swapChainDesc.BufferCount = nFrameBackBufCount;
-		swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
-		swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;	// 未知
-		swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
-		swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-		ThrowIfFailed(pIDXGIFactory7->CreateSwapChainForComposition(
-			pICMDQueue.Get()
-			, &swapChainDesc
-			, nullptr
-			, pISwapChain1.GetAddressOf()));
-		ThrowIfFailed(pISwapChain1.As(&pISwapChain3));
-		for (UINT i = 0; i < swapChainDesc.BufferCount; i++)
-		{
-			ThrowIfFailed(pISwapChain3->GetBuffer(i, IID_PPV_ARGS(&pISwapChainBuffer[i])));
-		}
-
-	}
-#pragma endregion
-
-
-
-#pragma region 设置SwapChainPanel
-	{
-		ThrowIfFailed(
-			reinterpret_cast<IUnknown*>(swapChainPanel)->QueryInterface(IID_PPV_ARGS(&pIPanelNative))
-		);
-		ThrowIfFailed(pIPanelNative->SetSwapChain(pISwapChain3.Get()));
-	}
-#pragma endregion
-
-
-
 #pragma region 创建 DXR描述符堆
 	{
 		D3D12_DESCRIPTOR_HEAP_DESC stDXRDescriptorHeapDesc = {};
-		stDXRDescriptorHeapDesc.NumDescriptors = 2;
-		stDXRDescriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		stDXRDescriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+		stDXRDescriptorHeapDesc.NumDescriptors	= 2;
+		stDXRDescriptorHeapDesc.Type			= D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		stDXRDescriptorHeapDesc.Flags			= D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
 		ThrowIfFailed(pID3D12Device8->CreateDescriptorHeap(
 			&stDXRDescriptorHeapDesc
@@ -663,17 +665,17 @@ MainPage::MainPage()
 #pragma region 创建 UAV 并加入 DXR描述符堆
 	{
 		D3D12_RESOURCE_DESC stOutputResourceDesc = {};
-		stOutputResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-		stOutputResourceDesc.Alignment = 0;
-		stOutputResourceDesc.Width = iWidth;
-		stOutputResourceDesc.Height = iHeight;
-		stOutputResourceDesc.DepthOrArraySize = 1;
-		stOutputResourceDesc.MipLevels = 1;
-		stOutputResourceDesc.Format = emRenderTargetFormat; // The backbuffer is actually DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, but sRGB formats can't be used with UAVs. We will convert to sRGB ourselves in the shader
-		stOutputResourceDesc.SampleDesc.Count = 1;
-		stOutputResourceDesc.SampleDesc.Quality = 0;
-		stOutputResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-		stOutputResourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+		stOutputResourceDesc.Dimension			= D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		stOutputResourceDesc.Alignment			= 0;
+		stOutputResourceDesc.Width				= iWidth;
+		stOutputResourceDesc.Height				= iHeight;
+		stOutputResourceDesc.DepthOrArraySize	= 1;
+		stOutputResourceDesc.MipLevels			= 1;
+		stOutputResourceDesc.Format				= emRenderTargetFormat; // The backbuffer is actually DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, but sRGB formats can't be used with UAVs. We will convert to sRGB ourselves in the shader
+		stOutputResourceDesc.SampleDesc.Count	= 1;
+		stOutputResourceDesc.SampleDesc.Quality	= 0;
+		stOutputResourceDesc.Layout				= D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		stOutputResourceDesc.Flags				= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
 		ThrowIfFailed(pID3D12Device8->CreateCommittedResource(
 			&stDefaultHeapProps
@@ -703,7 +705,7 @@ MainPage::MainPage()
 		srvDesc.RaytracingAccelerationStructure.Location = pITopLevelAS->GetGPUVirtualAddress();
 
 		D3D12_CPU_DESCRIPTOR_HANDLE DXRDescriptorHeapHandle = pIDXRDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-		DXRDescriptorHeapHandle.ptr += pID3D12Device8->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+		DXRDescriptorHeapHandle.ptr += nDXRDescriptorSize;
 		pID3D12Device8->CreateShaderResourceView(nullptr, &srvDesc, DXRDescriptorHeapHandle);
 	}
 #pragma endregion
@@ -727,30 +729,6 @@ MainPage::MainPage()
 		// 0 dxil
 #pragma region 创建DXIL库
 		// 1
-		std::FILE* DxilFoBinFp = {};
-		_wfopen_s(&DxilFoBinFp, DxilFoBinFileName, L"rb");
-		if (DxilFoBinFp == nullptr)
-		{
-			std::wstring ss(DxilFoBinFileName);
-			ss += L" not exists";
-			auto a = ref new Platform::String(ss.c_str());
-
-			throw Platform::Exception::CreateException(-1, a);
-		}
-		std::vector<unsigned char> DxilFoBin = {};
-		if (DxilFoBinFp)
-		{
-			std::fseek(DxilFoBinFp, 0, SEEK_END);
-			UINT DxilFoBinLength = std::ftell(DxilFoBinFp);
-			std::fseek(DxilFoBinFp, 0, SEEK_SET);
-
-			DxilFoBin.resize(DxilFoBinLength);
-
-			std::fread(DxilFoBin.data(), sizeof(DxilFoBin[0]), DxilFoBinLength, DxilFoBinFp);
-			fclose(DxilFoBinFp);
-		}
-
-		// 2
 		const WCHAR* DxilLibExports[] = {
 			kRayGenShader
 			, kMissShader
@@ -767,12 +745,12 @@ MainPage::MainPage()
 
 		// 2
 		D3D12_DXIL_LIBRARY_DESC stdxilLibDesc = {};
-		stdxilLibDesc.DXILLibrary.pShaderBytecode = DxilFoBin.data();
-		stdxilLibDesc.DXILLibrary.BytecodeLength = DxilFoBin.size();
+		stdxilLibDesc.DXILLibrary.pShaderBytecode = dxil;
+		stdxilLibDesc.DXILLibrary.BytecodeLength = sizeof(dxil);
 		stdxilLibDesc.NumExports = ARRAYSIZE(DxilLibExports);
 		stdxilLibDesc.pExports = ExportDesc;
 
-		// 4
+		// 3
 		D3D12_STATE_SUBOBJECT stDXILLibSubobject = {};
 		stDXILLibSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
 		stDXILLibSubobject.pDesc = &stdxilLibDesc;
@@ -989,8 +967,6 @@ MainPage::MainPage()
 		Subobjects[SubObjectsIndexRootSignature] = stGlobalRootSignatureSubobject;
 #pragma endregion
 
-
-
 		D3D12_STATE_OBJECT_DESC stDXRPSODesc = {};
 		stDXRPSODesc.NumSubobjects = UINT(Subobjects.size());
 		stDXRPSODesc.pSubobjects = Subobjects.data();
@@ -1006,7 +982,6 @@ MainPage::MainPage()
 
 #pragma region 创建shader table
 	{
-
 		nShaderTableEntrySize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 		nShaderTableEntrySize += 8; // The ray-gen's descriptor table
 		nShaderTableEntrySize = MEMORY_UP_ALIGNMENT(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT, nShaderTableEntrySize);
@@ -1074,7 +1049,7 @@ MainPage::MainPage()
 				{
 				case Windows::Foundation::AsyncStatus::Started:
 				{
-					OutputDebugString(L"Windows::Foundation::AsyncStatus::Started\n");
+					//OutputDebugString(L"Windows::Foundation::AsyncStatus::Started\n");
 					// Prepare the command list for the next frame
 					UINT bufferIndex = pISwapChain3->GetCurrentBackBufferIndex();
 
@@ -1090,7 +1065,9 @@ MainPage::MainPage()
 					barrierA.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 					barrierA.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
 					barrierA.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-					pICMDList6->ResourceBarrier(1, &barrierA);
+					pICMDList6->ResourceBarrier(
+						1
+						, &barrierA);
 
 					// 3
 					D3D12_DISPATCH_RAYS_DESC raytraceDesc = {};
@@ -1162,11 +1139,13 @@ MainPage::MainPage()
 						, pIGraphicsList);
 					nFenceValue++;
 					pICMDQueue->Signal(pIFence1.Get(), nFenceValue);
+				
+					// 10
 					pISwapChain3->Present(1, 0);
 
 
 
-
+					// 11
 					pIFence1->SetEventOnCompletion(
 						nFenceValue
 						, FenceEvent);
@@ -1181,17 +1160,17 @@ MainPage::MainPage()
 				}
 				case Windows::Foundation::AsyncStatus::Completed:
 				{
-					OutputDebugString(L"Windows::Foundation::AsyncStatus::Completed\n");
+					//OutputDebugString(L"Windows::Foundation::AsyncStatus::Completed\n");
 					break;
 				}
 				case Windows::Foundation::AsyncStatus::Canceled:
 				{
-					OutputDebugString(L"Windows::Foundation::AsyncStatus::Canceled\n");
+					//OutputDebugString(L"Windows::Foundation::AsyncStatus::Canceled\n");
 					break;
 				}
 				case Windows::Foundation::AsyncStatus::Error:
 				{
-					OutputDebugString(L"Windows::Foundation::AsyncStatus::Error\n");
+					//OutputDebugString(L"Windows::Foundation::AsyncStatus::Error\n");
 					break;
 				}
 				default:
